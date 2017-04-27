@@ -42,6 +42,6 @@ The test images and processed through the pipeline and the results are saved in 
 
 [Project Video](./output_project_video.mp4)
 
-## Distort Test images
+## UnDistort Test images
 
 Added folder `undistorted_image` with the given test & calibration images transformed/undistorted using camera matrix `M` and distortion coefficient `DIST` in the Jupyter Notebook.
