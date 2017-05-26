@@ -1,137 +1,218 @@
 import numpy as np
-import math
+import cv2
+import matplotlib.pyplot as plt
+import matplotlib.image as mpimg
+from line import *
 
-def findHistPeaks(image, yTop, yBottom, Xleft, XRight):
-    """ Finds a histogram with in the image to extract lanes
+def sliding_window_search(wpimage):
+    # Assuming you have created a warped binary image called "wpimage"
+    # Take a histogram of the bottom half of the image
+    histogram = np.sum(wpimage[wpimage.shape[0]/2:,:], axis=0)
 
-    """
-    # find the histogram with in the image
-    histogram = np.sum(image[yTop:yBottom,:], axis=0)
+    # Create an output image to draw on and  visualize the result
+    out_img = np.dstack((wpimage, wpimage, wpimage))*255
+    
+    # Find the peak of the left and right halves of the histogram
+    # These will be the starting point for the left and right lines
+    midpoint = np.int(histogram.shape[0]/2)
+    leftx_base = np.argmax(histogram[:midpoint])
+    rightx_base = np.argmax(histogram[midpoint:]) + midpoint
 
-    # get max
-    if len(histogram[int(Xleft):int(XRight)])>0:
-        return np.argmax(histogram[int(Xleft):int(XRight)]) + Xleft
+    # Choose the number of sliding windows
+    nwindows = 9
+    
+    # Set height of windows
+    window_height = np.int(wpimage.shape[0]/nwindows)
+    
+    # Identify the x and y positions of all nonzero pixels in the image
+    nonzero = wpimage.nonzero()
+    nonzeroy = np.array(nonzero[0])
+    nonzerox = np.array(nonzero[1])
+    
+    # Current positions to be updated for each window
+    leftx_current = leftx_base
+    rightx_current = rightx_base
+    
+    # Set the width of the windows +/- margin
+    margin = 100
+    
+    # Set minimum number of pixels found to recenter window
+    minpix = 50
+    
+    # Create empty lists to receive left and right lane pixel indices
+    left_lane_inds = []
+    right_lane_inds = []
+
+    # Step through the windows one by one
+    for window in range(nwindows):
+        # Identify window boundaries in x and y (and right and left)
+        win_y_low = wpimage.shape[0] - (window+1)*window_height
+        win_y_high = wpimage.shape[0] - window*window_height
+        win_xleft_low = leftx_current - margin
+        win_xleft_high = leftx_current + margin
+        win_xright_low = rightx_current - margin
+        win_xright_high = rightx_current + margin
+        
+        # Draw the windows on the visualization image
+        # cv2.rectangle(out_img,(win_xleft_low,win_y_low),(win_xleft_high,win_y_high),(0,255,0), 2) 
+        # cv2.rectangle(out_img,(win_xright_low,win_y_low),(win_xright_high,win_y_high),(0,255,0), 2) 
+        
+        # Identify the nonzero pixels in x and y within the window
+        good_left_inds = ((nonzeroy >= win_y_low) & (nonzeroy < win_y_high) & (nonzerox >= win_xleft_low) & (nonzerox < win_xleft_high)).nonzero()[0]
+        good_right_inds = ((nonzeroy >= win_y_low) & (nonzeroy < win_y_high) & (nonzerox >= win_xright_low) & (nonzerox < win_xright_high)).nonzero()[0]
+        
+        # Append these indices to the lists
+        left_lane_inds.append(good_left_inds)
+        right_lane_inds.append(good_right_inds)
+        
+        # If you found > minpix pixels, recenter next window on their mean position
+        if len(good_left_inds) > minpix:
+            leftx_current = np.int(np.mean(nonzerox[good_left_inds]))
+        if len(good_right_inds) > minpix:        
+            rightx_current = np.int(np.mean(nonzerox[good_right_inds]))
+
+    # Concatenate the arrays of indices
+    left_lane_inds = np.concatenate(left_lane_inds)
+    right_lane_inds = np.concatenate(right_lane_inds)
+
+    # Extract left and right line pixel positions
+    leftx = nonzerox[left_lane_inds]
+    lefty = nonzeroy[left_lane_inds] 
+    rightx = nonzerox[right_lane_inds]
+    righty = nonzeroy[right_lane_inds]
+
+    #check for any lanes that are not detected in this current frame then use the history
+    if (leftx.size < 5):
+        left_lane.detected = False
     else:
-        return (Xleft + XRight) / 2
-
-def doValidateLanes(lane, curverad, fitx, fit):
-    """ Validate the detected lanes and set radius of curvature
-
-    """
-
-    if lane.detected:
-        # If lane is detected, set Line parameters and rad.of.curvature
-        if abs(curverad / lane.radius_of_curvature - 1) < .6:
-            lane.detected = True
-            lane.current_fit = fit
-            lane.allx = fitx
-            lane.bestx = np.mean(fitx)
-            lane.radius_of_curvature = curverad
-            lane.current_fit = fit
-        else:
-            lane.detected = False
-            fitx = lane.allx
+        left_lane.detected = True
+    
+    if (rightx.size < 5):
+        right_lane.detected = False
     else:
-        # lane was not detected & curvature is defined
-        if lane.radius_of_curvature:
-            if abs(curverad / lane.radius_of_curvature - 1) < 1:
-                lane.detected = True
-                lane.current_fit = fit
-                lane.allx = fitx
-                lane.bestx = np.mean(fitx)
-                lane.radius_of_curvature = curverad
-                lane.current_fit = fit
-            else:
-                lane.detected = False
-                fitx = lane.allx
-        # no-lane, curvature was defined
-        else:
-            lane.detected = True
-            lane.current_fit = fit
-            lane.allx = fitx
-            lane.bestx = np.mean(fitx)
-            lane.radius_of_curvature = curverad
-    return fitx
+        right_lane.detected = True
+        
+    #if lane is detected then try to fit the poly
+    if left_lane.detected == True & right_lane.detected == True:
+        # Fit a second order polynomial to each
+        left_fit = np.polyfit(lefty, leftx, 2)
+        right_fit = np.polyfit(righty, rightx, 2)
+        left_lane.best_fit = np.vstack([left_lane.best_fit,left_fit])
+        left_lane.best_fit[0] = left_fit
+        right_lane.best_fit = np.vstack([right_lane.best_fit,right_fit])
+        right_lane.best_fit[0] = right_fit
+        left_lane.best_fit = np.average(left_lane.best_fit[-left_lane.smoothen_nframes:], axis = 0)
+        right_lane.best_fit = np.average(right_lane.best_fit[-right_lane.smoothen_nframes:], axis = 0)
+    else: 
+        #use the history avg values 
+        left_fit = left_lane.best_fit
+        right_fit = right_lane.best_fit
 
+    #calculate the actual points in x and y is from 0 to 719
+    ploty = np.linspace(0, out_img.shape[0]-1, out_img.shape[0] )
+    left_fitx = left_fit[0]*ploty**2 + left_fit[1]*ploty + left_fit[2]
+    right_fitx = right_fit[0]*ploty**2 + right_fit[1]*ploty + right_fit[2]
 
-def doValidateDirection(right, right1, right2):
-    """ Validate the identified vehicle direction
-
-    """
-
-    # get direction from the current values
-    if abs((right-right1) / (right1-right2) - 1) < .2:
-        return right
+    #Take the average here of the last n frames   
+    if left_lane.first_frame == True:
+        left_lane.first_frame = False
+        left_lane.bestx = np.vstack([left_lane.bestx,left_fitx])
+        left_lane.bestx[0] = left_fitx
+        #print ("Inside first frame")
+    
+    if ((left_fitx[0] > right_fitx[0]) | (abs(left_fitx[0] - right_fitx[0])<350) | (abs(left_fitx[0] - right_fitx[0])>700) | 
+                   (left_fitx[0] > 800 )):
+        left_lane.bestx = np.vstack([left_lane.bestx,left_lane.bestx])  
     else:
-        # calculate based on the previous values
-        return right1 + (right1 - right2)
+        left_lane.bestx = np.vstack([left_lane.bestx,left_fitx])
+        
+    left_lane.bestx = np.average(left_lane.bestx[-left_lane.smoothen_nframes:], axis = 0)
+    
+    if right_lane.first_frame == True:
+        right_lane.first_frame = False
+        right_lane.bestx = np.vstack([right_lane.bestx,right_fitx])
+        right_lane.bestx[0] = right_fitx
+    
+    if ((left_fitx[0] > right_fitx[0]) | (abs(left_fitx[0] - right_fitx[0])<350) | (abs(left_fitx[0] - right_fitx[0])>700) |
+                      (right_fitx[0] > 1200)):
+        right_lane.bestx = np.vstack([right_lane.bestx,right_lane.bestx])
+    else:
+        right_lane.bestx = np.vstack([right_lane.bestx,right_fitx])
+    
+    right_lane.bestx = np.average(right_lane.bestx[-right_lane.smoothen_nframes:], axis = 0)
 
-def findLanes(n, image, x_window, lanes, leftLaneX, leftLaneY, rightLaneX, rightLaneY, window_ind, left_lane, right_lane):
-    """ This function finds points/coordinates for left lane and right lane
+    
+    window_img = np.zeros_like(out_img)
+    margin = 10
+    
+    out_img[nonzeroy[left_lane_inds], nonzerox[left_lane_inds]] = [255, 0, 255]
+    out_img[nonzeroy[right_lane_inds], nonzerox[right_lane_inds]] = [255, 0, 255]
+    # Generate a polygon to illustrate the SMOOTHENED FIT
+    # And recast the x and y points into usable format for cv2.fillPoly()
+    left_line_window1 = np.array([np.transpose(np.vstack([left_lane.bestx-margin, ploty]))])
+    left_line_window2 = np.array([np.flipud(np.transpose(np.vstack([left_lane.bestx+margin, ploty])))])
+    left_line_pts = np.hstack((left_line_window1, left_line_window2))
+    right_line_window1 = np.array([np.transpose(np.vstack([right_lane.bestx-margin, ploty]))])
+    right_line_window2 = np.array([np.flipud(np.transpose(np.vstack([right_lane.bestx+margin, ploty])))])
+    right_line_pts = np.hstack((right_line_window1, right_line_window2))
 
-        This fuction uses the binarized warped image to detect the lanes
-    """
+    # Draw the lane onto the warped blank image
+    cv2.fillPoly(window_img, np.int_([left_line_pts]), (0,255, 0))
+    cv2.fillPoly(window_img, np.int_([right_line_pts]), (0,255, 0))
+    result = cv2.addWeighted(out_img, 1, window_img, 1, 0)
+    
+    # Generate a polygon to illustrate the CURRENT FRAME FIT
+    # And recast the x and y points into usable format for cv2.fillPoly()
+    left_line_window1 = np.array([np.transpose(np.vstack([left_fitx-margin, ploty]))])
+    left_line_window2 = np.array([np.flipud(np.transpose(np.vstack([left_fitx+margin, ploty])))])
+    left_line_pts = np.hstack((left_line_window1, left_line_window2))
+    right_line_window1 = np.array([np.transpose(np.vstack([right_fitx-margin, ploty]))])
+    right_line_window2 = np.array([np.flipud(np.transpose(np.vstack([right_fitx+margin, ploty])))])
+    right_line_pts = np.hstack((right_line_window1, right_line_window2))
 
-    # making assumptions for
-    # left, right & center points for the warped image
-    left, right = (300, 1100)
-    center = 700
-    center_pre = center
-    direction = 0
-    index1 = np.zeros((n+1,2))
-    index1[0] = [300, 1100]
-    index1[1] = [300, 1100]
+    # Draw the lane onto the warped blank image
+    cv2.fillPoly(window_img, np.int_([left_line_pts]), (0,0, 255))
+    cv2.fillPoly(window_img, np.int_([right_line_pts]), (0,0, 255))
+    result = cv2.addWeighted(out_img, 1, window_img, 1, 0)
+    
+    #if the lane was detectded then calculate radius of curvature or use the last known value.
+    if (leftx.size > 2 | rightx.size > 2) :
+        y_eval = np.max(ploty)
+        
+        # Define conversions in x and y from pixels space to meters
+        ym_per_pix = 30/720 # meters per pixel in y dimension
+        xm_per_pix = 3.7/700 # meters per pixel in x dimension
 
-    for i in range(n-1):
+        # Fit new polynomials to x,y in world space
+        left_fit_cr = np.polyfit(lefty*ym_per_pix, leftx*xm_per_pix, 2)
+        right_fit_cr = np.polyfit(righty*ym_per_pix, rightx*xm_per_pix, 2)
 
-        # window range.
-        yTop = 720-720/n*(i+1)
-        yBottom = 720-720/n*i
+        # Calculate the new radii of curvature
+        left_curverad = ((1 + (2*left_fit_cr[0]*y_eval*ym_per_pix + left_fit_cr[1])**2)**1.5) / np.absolute(2*left_fit_cr[0])
+        right_curverad = ((1 + (2*right_fit_cr[0]*y_eval*ym_per_pix + right_fit_cr[1])**2)**1.5) / np.absolute(2*right_fit_cr[0])
+        
+        # Now our radius of curvature is in meters and dist from centre
+        lane_centre = (left_fitx[-1] + right_fitx[-1])/2.0
+        camera_centre = result.shape[1]/2.0
 
-        # left and right lanes are detected from the previous image
-        if (left_lane.detected==False) and (right_lane.detected==False):
-            # find historgram
-            left  = findHistPeaks(image, yTop, yBottom, index1[i+1,0]-200, index1[i+1,0]+200)
-            right = findHistPeaks(image, yTop, yBottom, index1[i+1,1]-200, index1[i+1,1]+200)
+        dist_centre_val = (lane_centre - camera_centre)*3.7/700
+        avg_cur = (right_curverad+left_curverad)/2.0
+        
+        left_lane.line_base_pos = np.vstack([left_lane.line_base_pos,dist_centre_val])
+        left_lane.line_base_pos[0] = dist_centre_val
+        left_lane.line_base_pos = np.average(left_lane.line_base_pos[-left_lane.smoothen_nframes:], axis = 0)
+        
+        left_lane.radius_of_curvature = np.vstack([left_lane.radius_of_curvature,avg_cur])
+        left_lane.radius_of_curvature[0] = avg_cur
+        left_lane.radius_of_curvature = np.average(left_lane.radius_of_curvature[-left_lane.smoothen_nframes:], axis = 0)
+        
+    # else use the history curvature
+    else:
+        dist_centre_val = left_lane.line_base_pos
+        avg_cur = left_lane.radius_of_curvature
+    
+    #reset the lane detected to false for the next frame 
+    left_lane.detected == False
+    right_lane.detected == False
 
-            # set direction
-            left  = doValidateDirection(left, index1[i+1,0], index1[i,0])
-            right = doValidateDirection(right, index1[i+1,1], index1[i,1])
-
-            # set center
-            center_pre = center
-            center = (left + right)/2
-            direction = center - center_pre
-        else:
-            # both the lanes are detected in the previous image
-            left  = left_lane.windows[window_ind, i]
-            right = right_lane.windows[window_ind, i]
-
-        # ensure the distance between left and right lanes are wide enough
-        if abs(left-right) > 600:
-            # Append coordinates to the left lane arrays
-            left_lane_array = lanes[(lanes[:,1]>=left-x_window) & (lanes[:,1]<left+x_window) &
-                                 (lanes[:,0]<=yBottom) & (lanes[:,0]>=yTop)]
-            leftLaneX += left_lane_array[:,1].flatten().tolist()
-            leftLaneY += left_lane_array[:,0].flatten().tolist()
-
-            if not math.isnan(np.mean(left_lane_array[:,1])):
-                left_lane.windows[window_ind, i] = np.mean(left_lane_array[:,1])
-                index1[i+2,0] = np.mean(left_lane_array[:,1])
-            else:
-                index1[i+2,0] = index1[i+1,0] + direction
-                left_lane.windows[window_ind, i] = index1[i+2,0]
-
-            # Append coordinates to the right lane
-            right_lane_array = lanes[(lanes[:,1]>=right-x_window) & (lanes[:,1]<right+x_window) &
-                                  (lanes[:,0]<yBottom) & (lanes[:,0]>=yTop)]
-            rightLaneX += right_lane_array[:,1].flatten().tolist()
-            rightLaneY += right_lane_array[:,0].flatten().tolist()
-            if not math.isnan(np.mean(right_lane_array[:,1])):
-                right_lane.windows[window_ind, i] = np.mean(right_lane_array[:,1])
-                index1[i+2,1] = np.mean(right_lane_array[:,1])
-            else:
-                index1[i+2,1] = index1[i+1,1] + direction
-                right_lane.windows[window_ind, i] = index1[i+2,1]
-
-    return leftLaneX, leftLaneY, rightLaneX, rightLaneY
+    return result, left_lane.bestx, right_lane.bestx, ploty, left_lane.radius_of_curvature, left_lane.line_base_pos
