@@ -79,7 +79,7 @@ Using below conversion to get radius of curvature in meters
 
 
 *  Cell # 15 tests the all the above mentioned methods in an image processing pipeline and displays the output
-  ![Pipeline testing](./sliding_window/lane-image-1.png)
+  ![Pipeline testing](./sliding_window/lane-image-8.png)
 
 ## Results and Discussion
 
